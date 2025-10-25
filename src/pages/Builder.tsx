@@ -241,44 +241,63 @@ export default function Builder() {
   };
 
   const handleRun = async () => {
-    if (!authorized) {
-      toast.error('Please check "Authorize Targets" before running');
-      return;
-    }
+  if (nodes.length === 0) {
+    toast.error('Add nodes to your workflow before running');
+    return;
+  }
 
-    if (nodes.length === 0) {
-      toast.error('Add nodes to your workflow before running');
-      return;
-    }
+  try {
+    setIsRunning(true);
+    setLogs([]);
+    toast.success('Starting inline workflow...');
 
-    if (!currentWorkflow?.id) {
-      toast.error('Please save the workflow before running');
-      return;
-    }
+    // Build temporary workflow payload (does not require saving)
+    const workflowData = {
+      id: currentWorkflow?.id || `inline-${Date.now()}`,
+      name: workflowName || 'Inline Workflow',
+      nodes: nodes.map((n) => ({
+        id: n.id,
+        kind: n.data.kind,
+        label: n.data.label,
+        category: n.data.category,
+        config: n.data.config,
+        position: n.position,
+      })),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        label: e.label,
+      })),
+    };
 
-    try {
-      setIsRunning(true);
-      setLogs([]);
-      toast.success('Starting workflow...');
+    // Targets you want to scan (localhost or user-specified)
+    const targets = ['127.0.0.1'];
 
-      // Get targets from workflow config or use default
-      const targets = ['demo-target.example.com']; // TODO: Allow user to specify targets
-
-      const run = await startRunMutation({
-        workflowId: currentWorkflow.id,
+    // Directly call inline execution endpoint
+    const response = await fetch('/api/runs/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workflow: workflowData,
         targets,
-        runMode: 'demo', // TODO: Allow user to select mode
-        authorizeTargets: authorized,
-      }).unwrap();
+        runMode: 'demo',
+        authorizeTargets: true,
+      }),
+    });
 
-      setCurrentRunId(run.id);
-      toast.success('Workflow started');
-    } catch (error: any) {
-      setIsRunning(false);
-      toast.error(`Failed to start workflow: ${error.message || 'Unknown error'}`);
-      console.error('Run error:', error);
-    }
-  };
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const run = await response.json();
+
+    setCurrentRunId(run.runId);
+    toast.success('Workflow execution started');
+  } catch (error: any) {
+    setIsRunning(false);
+    toast.error(`Failed to start workflow: ${error.message || 'Unknown error'}`);
+    console.error('Run error:', error);
+  }
+};
+
 
   const loadDemoWorkflow = () => {
     // This would load the demo workflow from mockData

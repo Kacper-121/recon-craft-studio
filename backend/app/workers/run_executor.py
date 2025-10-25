@@ -1,196 +1,116 @@
-"""
-Worker module for executing workflow runs.
-This module is executed by RQ workers to process queued jobs.
-"""
 import asyncio
-from typing import List, Dict, Any
+import shlex
+import traceback
 from datetime import datetime
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
+from app.models.run import RunStatus, StepStatus, Finding, FindingSeverity
+from app.models.workflow import NodeKind
 from app.core.config import settings
-from app.core.logging import setup_logging, get_logger
-from app.workers.tool_runner import ToolRunner
-from app.models.run import RunStatus, StepStatus
+from app.core.logging import get_logger
 
-setup_logging()
 logger = get_logger(__name__)
 
-
-def execute_run(run_id: str, workflow: Dict[str, Any], targets: List[str], run_mode: str):
-    """
-    Execute a workflow run.
-    This function is called by RQ workers.
-    """
-    logger.info("Starting run execution", run_id=run_id, run_mode=run_mode)
-
-    # Connect to MongoDB (synchronous for worker)
-    client = MongoClient(settings.MONGODB_URL)
-    db = client[settings.MONGODB_DB_NAME]
-
+async def execute_run_async(run_id: str, workflow_doc: dict, targets: list, run_mode: str):
+    """Execute a workflow run asynchronously."""
     try:
-        # Update run status to running
-        db.runs.update_one(
-            {"id": run_id},
-            {"$set": {"status": RunStatus.RUNNING}}
-        )
+        # Mongo connection
+        client = AsyncIOMotorClient(settings.MONGO_URI)
+        db = client[settings.MONGO_DB_NAME]
+        runs = db.runs
 
-        # Get workflow nodes and edges
-        nodes = workflow.get("nodes", [])
-        edges = workflow.get("edges", [])
+        # Set run to running
+        await runs.update_one({"id": run_id}, {"$set": {"status": RunStatus.RUNNING, "startedAt": datetime.utcnow()}})
 
-        # Build execution graph
-        execution_order = build_execution_order(nodes, edges)
-
-        logger.info("Execution order determined", run_id=run_id, steps=len(execution_order))
-
-        # Execute each node in order
-        tool_runner = ToolRunner(run_mode=run_mode)
-
-        for node in execution_order:
+        for node in workflow_doc.get("nodes", []):
             node_id = node["id"]
-            node_kind = node["kind"]
-            node_config = node.get("config", {})
+            node_kind = node.get("kind")
 
-            logger.info("Executing node", run_id=run_id, node_id=node_id, kind=node_kind)
-
-            # Update step status to running
-            db.runs.update_one(
-                {"id": run_id, "steps.nodeId": node_id},
-                {"$set": {
-                    "steps.$.status": StepStatus.RUNNING,
-                    "steps.$.startedAt": datetime.utcnow()
-                }}
-            )
-
-            # Add initial log
-            log = f"[{datetime.utcnow().isoformat()}] Starting {node['label']}"
-            db.runs.update_one(
-                {"id": run_id, "steps.nodeId": node_id},
-                {"$push": {"steps.$.logs": log}}
-            )
-
+            await _update_step_status(runs, run_id, node_id, StepStatus.RUNNING)
             try:
-                # Execute the tool
-                result = tool_runner.execute(
-                    node_kind=node_kind,
-                    node_config=node_config,
-                    targets=targets,
-                    run_id=run_id,
-                    node_id=node_id
-                )
-
-                # Add logs from execution
-                for log_line in result.get("logs", []):
-                    db.runs.update_one(
-                        {"id": run_id, "steps.nodeId": node_id},
-                        {"$push": {"steps.$.logs": log_line}}
-                    )
-
-                # Add findings if any
-                if result.get("findings"):
-                    db.runs.update_one(
-                        {"id": run_id, "steps.nodeId": node_id},
-                        {"$set": {"steps.$.findings": result["findings"]}}
-                    )
-
-                # Update step status to succeeded
-                db.runs.update_one(
-                    {"id": run_id, "steps.nodeId": node_id},
-                    {"$set": {
-                        "steps.$.status": StepStatus.SUCCEEDED,
-                        "steps.$.completedAt": datetime.utcnow()
-                    }}
-                )
-
-                logger.info("Node execution completed", run_id=run_id, node_id=node_id)
-
+                if node_kind == NodeKind.NMAP:
+                    await _run_nmap_step(runs, run_id, node, targets)
+                else:
+                    await _append_step_log(runs, run_id, node_id, f"Skipping unsupported node type: {node_kind}")
+                    await _update_step_status(runs, run_id, node_id, StepStatus.SUCCEEDED)
             except Exception as e:
-                error_msg = str(e)
-                logger.error("Node execution failed", run_id=run_id, node_id=node_id, error=error_msg)
+                tb = traceback.format_exc()
+                await _append_step_log(runs, run_id, node_id, f"Error running node: {e}\n{tb}")
+                await _update_step_status(runs, run_id, node_id, StepStatus.FAILED, str(e))
+                await runs.update_one({"id": run_id}, {"$set": {"status": RunStatus.FAILED, "endedAt": datetime.utcnow()}})
+                return
 
-                # Add error log
-                error_log = f"[{datetime.utcnow().isoformat()}] ERROR: {error_msg}"
-                db.runs.update_one(
-                    {"id": run_id, "steps.nodeId": node_id},
-                    {"$push": {"steps.$.logs": error_log}}
-                )
-
-                # Update step status to failed
-                db.runs.update_one(
-                    {"id": run_id, "steps.nodeId": node_id},
-                    {"$set": {
-                        "steps.$.status": StepStatus.FAILED,
-                        "steps.$.completedAt": datetime.utcnow(),
-                        "steps.$.error": error_msg
-                    }}
-                )
-
-                # If critical node fails, fail the entire run
-                if node_kind not in ["slackAlert", "discordAlert", "reportExport"]:
-                    raise
-
-        # Calculate summary
-        summary = calculate_summary(db, run_id)
-
-        # Update run status to succeeded
-        db.runs.update_one(
-            {"id": run_id},
-            {"$set": {
-                "status": RunStatus.SUCCEEDED,
-                "endedAt": datetime.utcnow(),
-                "summary": summary
-            }}
-        )
-
-        logger.info("Run execution completed successfully", run_id=run_id)
+        # Mark run completed
+        await runs.update_one({"id": run_id}, {"$set": {"status": RunStatus.SUCCEEDED, "endedAt": datetime.utcnow()}})
+        logger.info("Run completed successfully", run_id=run_id)
 
     except Exception as e:
-        logger.error("Run execution failed", run_id=run_id, error=str(e))
-
-        # Update run status to failed
-        db.runs.update_one(
-            {"id": run_id},
-            {"$set": {
-                "status": RunStatus.FAILED,
-                "endedAt": datetime.utcnow(),
-                "error": str(e)
-            }}
-        )
-
+        logger.error("Fatal error executing run", run_id=run_id, error=str(e))
+        tb = traceback.format_exc()
+        await runs.update_one({"id": run_id}, {"$set": {"status": RunStatus.FAILED, "error": tb, "endedAt": datetime.utcnow()}})
     finally:
         client.close()
 
+async def _run_nmap_step(runs, run_id: str, node: dict, targets: list):
+    """Execute an Nmap scan node."""
+    node_id = node["id"]
+    config = node.get("config", {})
+    args = config.get("args", "-sV -Pn")
+    ports = config.get("ports")
 
-def build_execution_order(nodes: List[Dict], edges: List[Dict]) -> List[Dict]:
-    """Build the order in which nodes should be executed based on edges."""
-    # Simple topological sort
-    # For MVP, we'll execute nodes in the order they appear
-    # In production, implement proper topological sort based on edges
+    base_cmd = ["nmap"]
+    if args:
+        base_cmd += shlex.split(args)
+    if ports:
+        base_cmd += ["-p", str(ports)]
 
-    # Filter out non-execution nodes or sort by connections
-    execution_order = [node for node in nodes if node["kind"] != "start"]
+    results = []
+    for target in targets:
+        cmd = base_cmd + [target]
+        await _append_step_log(runs, run_id, node_id, f"Running command: {' '.join(cmd)}")
 
-    return execution_order
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await proc.communicate()
+        out_text = stdout.decode("utf-8", errors="replace")
+        err_text = stderr.decode("utf-8", errors="replace")
 
+        if out_text:
+            await _append_step_log(runs, run_id, node_id, f"[{target}] Nmap output:\n{out_text}")
+        if err_text:
+            await _append_step_log(runs, run_id, node_id, f"[{target}] Nmap errors:\n{err_text}")
 
-def calculate_summary(db, run_id: str) -> Dict[str, Any]:
-    """Calculate run summary from findings."""
-    run = db.runs.find_one({"id": run_id})
+        # Example of simple finding detection
+        findings = []
+        if "open" in out_text.lower():
+            findings.append(Finding(
+                id=f"{node_id}-{target}-open",
+                severity=FindingSeverity.MEDIUM,
+                title=f"Open ports found on {target}",
+                description="One or more open ports detected.",
+                service="nmap",
+                metadata={"output": out_text}
+            ).dict())
 
-    if not run:
-        return {}
+        await runs.update_one(
+            {"id": run_id, "steps.nodeId": node_id},
+            {"$push": {"steps.$.findings": {"$each": findings}}}
+        )
 
-    total_findings = 0
-    severities = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+        results.append({"target": target, "stdout": out_text, "stderr": err_text})
 
-    for step in run.get("steps", []):
-        findings = step.get("findings", [])
-        total_findings += len(findings)
+    await _append_step_log(runs, run_id, node_id, "Nmap scan completed.")
+    await _update_step_status(runs, run_id, node_id, StepStatus.SUCCEEDED)
 
-        for finding in findings:
-            severity = finding.get("severity", "low")
-            severities[severity] = severities.get(severity, 0) + 1
+async def _append_step_log(runs, run_id: str, step_id: str, log: str):
+    """Push a log line into step logs."""
+    await runs.update_one({"id": run_id, "steps.nodeId": step_id}, {"$push": {"steps.$.logs": log}})
 
-    return {
-        "findingsCount": total_findings,
-        "severities": severities
-    }
+async def _update_step_status(runs, run_id: str, step_id: str, status: StepStatus, error: str = None):
+    """Update the status for a given step."""
+    update = {"steps.$.status": status}
+    if status == StepStatus.RUNNING:
+        update["steps.$.startedAt"] = datetime.utcnow()
+    elif status in [StepStatus.SUCCEEDED, StepStatus.FAILED]:
+        update["steps.$.completedAt"] = datetime.utcnow()
+    if error:
+        update["steps.$.error"] = error
+    await runs.update_one({"id": run_id, "steps.nodeId": step_id}, {"$set": update})

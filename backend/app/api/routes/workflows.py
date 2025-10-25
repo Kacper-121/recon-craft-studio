@@ -15,7 +15,7 @@ router = APIRouter(prefix="/workflows", tags=["workflows"])
 @router.get("", response_model=List[Workflow])
 async def list_workflows(
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """List all workflows."""
     workflows = []
@@ -24,7 +24,7 @@ async def list_workflows(
     async for workflow_doc in cursor:
         workflows.append(Workflow(**workflow_doc))
 
-    logger.info("Workflows listed", count=len(workflows), user_id=current_user["user_id"])
+    logger.info("Workflows listed", count=len(workflows))
     return workflows
 
 
@@ -32,7 +32,7 @@ async def list_workflows(
 async def get_workflow(
     workflow_id: str,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Get a specific workflow."""
     workflow_doc = await db.workflows.find_one({"id": workflow_id})
@@ -43,7 +43,7 @@ async def get_workflow(
             detail="Workflow not found"
         )
 
-    logger.info("Workflow retrieved", workflow_id=workflow_id, user_id=current_user["user_id"])
+    logger.info("Workflow retrieved", workflow_id=workflow_id)
     return Workflow(**workflow_doc)
 
 
@@ -51,7 +51,7 @@ async def get_workflow(
 async def create_workflow(
     workflow: WorkflowCreate,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Create or update a workflow."""
     now = datetime.utcnow()
@@ -77,7 +77,7 @@ async def create_workflow(
             {"$set": updated_workflow.dict()}
         )
 
-        logger.info("Workflow updated", workflow_id=workflow_id, user_id=current_user["user_id"])
+        logger.info("Workflow updated", workflow_id=workflow_id)
         return updated_workflow
     else:
         # Create new workflow
@@ -93,7 +93,7 @@ async def create_workflow(
 
         await db.workflows.insert_one(new_workflow.dict())
 
-        logger.info("Workflow created", workflow_id=new_workflow.id, user_id=current_user["user_id"])
+        logger.info("Workflow created (auth disabled)", workflow_id=new_workflow.id)
         return new_workflow
 
 
@@ -101,7 +101,7 @@ async def create_workflow(
 async def delete_workflow(
     workflow_id: str,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Delete a workflow."""
     result = await db.workflows.delete_one({"id": workflow_id})
@@ -112,7 +112,7 @@ async def delete_workflow(
             detail="Workflow not found"
         )
 
-    logger.info("Workflow deleted", workflow_id=workflow_id, user_id=current_user["user_id"])
+    logger.info("Workflow deleted", workflow_id=workflow_id)
     return None
 
 
@@ -120,7 +120,7 @@ async def delete_workflow(
 async def duplicate_workflow(
     workflow_id: str,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Duplicate a workflow."""
     # Get original workflow
@@ -146,5 +146,5 @@ async def duplicate_workflow(
 
     await db.workflows.insert_one(duplicated.dict())
 
-    logger.info("Workflow duplicated", original_id=workflow_id, new_id=duplicated.id, user_id=current_user["user_id"])
+    logger.info("Workflow duplicated", original_id=workflow_id, new_id=duplicated.id)
     return duplicated

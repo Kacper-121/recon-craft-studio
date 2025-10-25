@@ -8,10 +8,11 @@ import { NodeKind, NodeCategory } from '@/types/workflow';
 import { cn } from '@/lib/utils';
 
 interface NodePaletteProps {
-  onNodeDragStart: (nodeKind: NodeKind) => void;
+  onNodeDragStart: (nodeKind: NodeKind, event: React.DragEvent) => void;
 }
 
-const categories: { key: NodeCategory; label: string }[] = [
+const categories: { key: NodeCategory | 'all'; label: string }[] = [
+  { key: 'all', label: 'All' },
   { key: 'recon', label: 'Recon' },
   { key: 'analysis', label: 'Analysis' },
   { key: 'security', label: 'Security' },
@@ -23,18 +24,18 @@ export function NodePalette({ onNodeDragStart }: NodePaletteProps) {
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<NodeCategory | 'all'>('all');
 
-  const filteredNodes = Object.values(nodeDefinitions).filter((node) => {
-    const matchesSearch =
+  const filtered = Object.values(nodeDefinitions).filter((node) => {
+    const matchSearch =
       node.label.toLowerCase().includes(search.toLowerCase()) ||
       node.description.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = selectedCategory === 'all' || node.category === selectedCategory;
-    return matchesSearch && matchesCategory;
+    const matchCategory = selectedCategory === 'all' || node.category === selectedCategory;
+    return matchSearch && matchCategory;
   });
 
   return (
-    <div className="flex h-full flex-col border-r bg-card">
-      <div className="p-4 border-b">
-        <h3 className="font-semibold mb-3">Node Palette</h3>
+    <div className="flex h-full flex-col bg-card border-r">
+      <div className="p-4 border-b bg-background/80 backdrop-blur">
+        <h3 className="font-semibold mb-3 text-sm tracking-tight">Node Palette</h3>
         <div className="relative">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -46,20 +47,13 @@ export function NodePalette({ onNodeDragStart }: NodePaletteProps) {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1 p-3 border-b">
-        <Badge
-          variant={selectedCategory === 'all' ? 'default' : 'outline'}
-          className="cursor-pointer transition-smooth"
-          onClick={() => setSelectedCategory('all')}
-        >
-          All
-        </Badge>
+      <div className="flex flex-wrap gap-1 p-3 border-b bg-background/50">
         {categories.map((cat) => (
           <Badge
             key={cat.key}
             variant={selectedCategory === cat.key ? 'default' : 'outline'}
-            className="cursor-pointer transition-smooth"
             onClick={() => setSelectedCategory(cat.key)}
+            className="cursor-pointer text-xs"
           >
             {cat.label}
           </Badge>
@@ -68,22 +62,39 @@ export function NodePalette({ onNodeDragStart }: NodePaletteProps) {
 
       <ScrollArea className="flex-1">
         <div className="p-3 space-y-2">
-          {filteredNodes.map((node) => {
+          {filtered.length === 0 && (
+            <div className="text-muted-foreground text-xs text-center py-6">
+              No matching nodes
+            </div>
+          )}
+          {filtered.map((node) => {
             const Icon = node.icon;
             return (
               <div
                 key={node.kind}
                 draggable
-                onDragStart={() => onNodeDragStart(node.kind)}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/reactflow', node.kind);
+                  onNodeDragStart(node.kind, e);
+                }}
                 className={cn(
-                  'flex items-start gap-3 p-3 rounded-lg border cursor-move transition-smooth hover:shadow-md',
-                  getCategoryColor(node.category)
+                  'flex items-start gap-3 p-3 rounded-md border bg-background hover:bg-accent cursor-grab transition-all',
+                  'hover:shadow-md active:cursor-grabbing'
                 )}
               >
-                <Icon className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                <div
+                  className={cn(
+                    'flex h-7 w-7 items-center justify-center rounded-md shrink-0',
+                    getCategoryColor(node.category)
+                  )}
+                >
+                  <Icon className="h-4 w-4 text-primary-foreground" />
+                </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm">{node.label}</div>
-                  <div className="text-xs opacity-80 mt-0.5">{node.description}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {node.description}
+                  </div>
                 </div>
               </div>
             );

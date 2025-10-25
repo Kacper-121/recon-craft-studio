@@ -13,7 +13,7 @@ router = APIRouter(prefix="/integrations", tags=["integrations"])
 async def save_slack_integration(
     slack: SlackIntegration,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Save Slack webhook integration."""
     # Get or create user settings
@@ -36,14 +36,14 @@ async def save_slack_integration(
             **settings.dict()
         })
 
-    logger.info("Slack integration saved", user_id=current_user["user_id"])
+    logger.info("Slack integration saved")
     return slack
 
 
 @router.get("/slack", response_model=SlackIntegration)
 async def get_slack_integration(
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Get Slack integration settings."""
     settings_doc = await db.settings.find_one({"userId": current_user["user_id"]})
@@ -61,7 +61,7 @@ async def get_slack_integration(
 async def save_discord_integration(
     discord: DiscordIntegration,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Save Discord webhook integration."""
     # Get or create user settings
@@ -84,14 +84,14 @@ async def save_discord_integration(
             **settings.dict()
         })
 
-    logger.info("Discord integration saved", user_id=current_user["user_id"])
+    logger.info("Discord integration saved")
     return discord
 
 
 @router.get("/discord", response_model=DiscordIntegration)
 async def get_discord_integration(
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Get Discord integration settings."""
     settings_doc = await db.settings.find_one({"userId": current_user["user_id"]})

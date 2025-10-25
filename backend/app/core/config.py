@@ -17,8 +17,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
 
     # MongoDB
-    MONGODB_URL: str = "mongodb://localhost:27017"
-    MONGODB_DB_NAME: str = "reconcraft"
+    MONGODB_URI: str = "mongodb://localhost:27017/reconcraft"
 
     # Redis
     REDIS_HOST: str = "localhost"

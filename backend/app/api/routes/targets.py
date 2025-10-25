@@ -15,7 +15,7 @@ router = APIRouter(prefix="/targets", tags=["targets"])
 @router.get("", response_model=List[Target])
 async def list_targets(
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """List all authorized targets."""
     targets = []
@@ -24,7 +24,7 @@ async def list_targets(
     async for target_doc in cursor:
         targets.append(Target(**target_doc))
 
-    logger.info("Targets listed", count=len(targets), user_id=current_user["user_id"])
+    logger.info("Targets listed", count=len(targets))
     return targets
 
 
@@ -32,7 +32,7 @@ async def list_targets(
 async def create_target(
     target: TargetCreate,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Add a new authorized target."""
     # Check if target already exists
@@ -52,7 +52,7 @@ async def create_target(
 
     await db.targets.insert_one(new_target.dict())
 
-    logger.info("Target created", target_id=new_target.id, value=target.value, user_id=current_user["user_id"])
+    logger.info("Target created", target_id=new_target.id, value=target.value)
     return new_target
 
 
@@ -60,7 +60,7 @@ async def create_target(
 async def bulk_create_targets(
     request: TargetBulkCreate,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Bulk import targets."""
     created_targets = []
@@ -86,7 +86,7 @@ async def bulk_create_targets(
             logger.warning("Failed to create target", value=target_value, error=str(e))
             continue
 
-    logger.info("Bulk targets created", count=len(created_targets), user_id=current_user["user_id"])
+    logger.info("Bulk targets created", count=len(created_targets))
     return created_targets
 
 
@@ -94,7 +94,7 @@ async def bulk_create_targets(
 async def delete_target(
     target_id: str,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user)
 ):
     """Delete an authorized target."""
     result = await db.targets.delete_one({"id": target_id})
@@ -105,5 +105,5 @@ async def delete_target(
             detail="Target not found"
         )
 
-    logger.info("Target deleted", target_id=target_id, user_id=current_user["user_id"])
+    logger.info("Target deleted", target_id=target_id)
     return None
