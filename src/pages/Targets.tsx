@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Plus, Trash2, Upload } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -8,23 +8,27 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { fetchTargets, saveTarget, deleteTarget, bulkImportTargets } from '@/store/slices/targetsSlice';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
+import {
+  useGetTargetsQuery,
+  useCreateTargetMutation,
+  useBulkImportTargetsMutation,
+  useDeleteTargetMutation,
+} from '@/api/reconCraftApi';
 
 export default function Targets() {
-  const dispatch = useAppDispatch();
-  const { targets } = useAppSelector((state) => state.targets);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false);
   const [newTarget, setNewTarget] = useState('');
   const [newTags, setNewTags] = useState('');
   const [bulkTargets, setBulkTargets] = useState('');
 
-  useEffect(() => {
-    dispatch(fetchTargets());
-  }, [dispatch]);
+  // RTK Query hooks
+  const { data: targets = [], isLoading: loadingTargets } = useGetTargetsQuery();
+  const [createTarget] = useCreateTargetMutation();
+  const [bulkImport] = useBulkImportTargetsMutation();
+  const [deleteTarget] = useDeleteTargetMutation();
 
   const handleAddTarget = async () => {
     if (!newTarget.trim()) {
@@ -32,32 +36,47 @@ export default function Targets() {
       return;
     }
 
-    const tags = newTags.split(',').map((t) => t.trim()).filter(Boolean);
-    await dispatch(saveTarget({ value: newTarget, tags }));
-    
-    setNewTarget('');
-    setNewTags('');
-    setIsAddDialogOpen(false);
-    toast.success('Target added');
+    try {
+      const tags = newTags.split(',').map((t) => t.trim()).filter(Boolean);
+      await createTarget({ value: newTarget, tags }).unwrap();
+
+      setNewTarget('');
+      setNewTags('');
+      setIsAddDialogOpen(false);
+      toast.success('Target added');
+    } catch (error: any) {
+      toast.error(`Failed to add target: ${error.message || 'Unknown error'}`);
+      console.error('Add target error:', error);
+    }
   };
 
   const handleBulkImport = async () => {
-    const targets = bulkTargets.split('\n').map((t) => t.trim()).filter(Boolean);
-    
-    if (targets.length === 0) {
+    const targetList = bulkTargets.split('\n').map((t) => t.trim()).filter(Boolean);
+
+    if (targetList.length === 0) {
       toast.error('Please enter at least one target');
       return;
     }
 
-    await dispatch(bulkImportTargets(targets));
-    setBulkTargets('');
-    setIsBulkDialogOpen(false);
-    toast.success(`Imported ${targets.length} target(s)`);
+    try {
+      await bulkImport({ targets: targetList }).unwrap();
+      setBulkTargets('');
+      setIsBulkDialogOpen(false);
+      toast.success(`Imported ${targetList.length} target(s)`);
+    } catch (error: any) {
+      toast.error(`Failed to import targets: ${error.message || 'Unknown error'}`);
+      console.error('Bulk import error:', error);
+    }
   };
 
   const handleDelete = async (id: string) => {
-    await dispatch(deleteTarget(id));
-    toast.success('Target deleted');
+    try {
+      await deleteTarget(id).unwrap();
+      toast.success('Target deleted');
+    } catch (error: any) {
+      toast.error(`Failed to delete target: ${error.message || 'Unknown error'}`);
+      console.error('Delete target error:', error);
+    }
   };
 
   const isValidTarget = (value: string): boolean => {

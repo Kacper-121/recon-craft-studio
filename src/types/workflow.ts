@@ -102,3 +102,15 @@ export interface Settings {
     discord?: Integration;
   };
 }
+
+export type RunMode = 'live' | 'demo';
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  key?: string; // Only provided on creation
+  keyPrefix: string;
+  createdAt: string;
+  expiresAt?: string;
+  lastUsed?: string;
+}

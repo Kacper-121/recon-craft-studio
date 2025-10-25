@@ -7,11 +7,10 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { fetchRuns, fetchRun } from '@/store/slices/runsSlice';
 import { Run, RunStatus } from '@/types/workflow';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
+import { useGetRunsQuery, useGetRunQuery, useSendRunToSlackMutation } from '@/api/reconCraftApi';
 
 const statusConfig: Record<RunStatus, { icon: any; variant: string; label: string }> = {
   queued: { icon: Clock, variant: 'secondary', label: 'Queued' },
@@ -22,21 +21,22 @@ const statusConfig: Record<RunStatus, { icon: any; variant: string; label: strin
 
 export default function Runs() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const dispatch = useAppDispatch();
-  const { runs, currentRun } = useAppSelector((state) => state.runs);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
+  const runId = searchParams.get('id');
+
+  // Use RTK Query hooks
+  const { data: runs = [], isLoading: loadingRuns } = useGetRunsQuery({});
+  const { data: currentRun } = useGetRunQuery(runId!, {
+    skip: !runId,
+    pollingInterval: 3000, // Poll every 3 seconds for updates
+  });
+  const [sendToSlack] = useSendRunToSlackMutation();
 
   useEffect(() => {
-    dispatch(fetchRuns());
-  }, [dispatch]);
-
-  useEffect(() => {
-    const id = searchParams.get('id');
-    if (id) {
-      dispatch(fetchRun(id));
+    if (runId) {
       setIsSheetOpen(true);
     }
-  }, [searchParams, dispatch]);
+  }, [runId]);
 
   const handleRowClick = (run: Run) => {
     setSearchParams({ id: run.id });
@@ -47,8 +47,16 @@ export default function Runs() {
     setSearchParams({});
   };
 
-  const handleSendToSlack = () => {
-    toast.success('Alert sent to Slack');
+  const handleSendToSlack = async () => {
+    if (!currentRun) return;
+
+    try {
+      await sendToSlack(currentRun.id).unwrap();
+      toast.success('Alert sent to Slack');
+    } catch (error: any) {
+      toast.error(`Failed to send to Slack: ${error.message || 'Unknown error'}`);
+      console.error('Slack error:', error);
+    }
   };
 
   return (

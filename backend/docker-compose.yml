@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # MongoDB database
+  mongodb:
+    image: mongo:7.0
+    container_name: reconcraft-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: reconcraft
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - reconcraft_network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/reconcraft --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: reconcraft-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - reconcraft_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI backend API
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: reconcraft-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=reconcraft
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key}
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=http://localhost:8080,http://localhost:3000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - /var/run/docker.sock:/var/run/docker.sock  # For Docker-in-Docker
+    networks:
+      - reconcraft_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # RQ Worker for background jobs
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: reconcraft-worker
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=reconcraft
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key}
+      - LOG_LEVEL=INFO
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - /var/run/docker.sock:/var/run/docker.sock  # For Docker-in-Docker
+    networks:
+      - reconcraft_network
+    command: python worker.py
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  reconcraft_network:
+    driver: bridge

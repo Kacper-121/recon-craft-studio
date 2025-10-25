@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Play, Clock, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { fetchWorkflows } from '@/store/slices/workflowsSlice';
-import { fetchRuns } from '@/store/slices/runsSlice';
 import { RunStatus } from '@/types/workflow';
 import { formatDistanceToNow } from 'date-fns';
+import { useGetWorkflowsQuery, useGetRunsQuery, useGetMetricsQuery } from '@/api/reconCraftApi';
 
 const statusConfig: Record<RunStatus, { icon: any; variant: string; label: string }> = {
   queued: { icon: Clock, variant: 'secondary', label: 'Queued' },
@@ -19,15 +17,12 @@ const statusConfig: Record<RunStatus, { icon: any; variant: string; label: strin
 };
 
 export default function Dashboard() {
-  const dispatch = useAppDispatch();
-  const { workflows } = useAppSelector((state) => state.workflows);
-  const { runs } = useAppSelector((state) => state.runs);
   const [showBanner, setShowBanner] = useState(true);
 
-  useEffect(() => {
-    dispatch(fetchWorkflows());
-    dispatch(fetchRuns());
-  }, [dispatch]);
+  // Use RTK Query hooks for data fetching
+  const { data: workflows = [], isLoading: loadingWorkflows } = useGetWorkflowsQuery();
+  const { data: runs = [], isLoading: loadingRuns } = useGetRunsQuery({ limit: 5 });
+  const { data: metrics } = useGetMetricsQuery();
 
   const recentRuns = runs.slice(0, 5);
 

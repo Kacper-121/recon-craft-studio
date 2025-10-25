@@ -23,11 +23,16 @@ import { NodeInspector } from '@/components/workflow/NodeInspector';
 import { RunConsole } from '@/components/workflow/RunConsole';
 import { nodeDefinitions } from '@/lib/nodeDefinitions';
 import { NodeKind, WorkflowNode } from '@/types/workflow';
-import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { fetchWorkflow, saveWorkflow, duplicateWorkflow } from '@/store/slices/workflowsSlice';
-import { startRun } from '@/store/slices/runsSlice';
 import { toast } from 'sonner';
 import { Play, Save, Copy, FileText } from 'lucide-react';
+import {
+  useGetWorkflowQuery,
+  useCreateWorkflowMutation,
+  useUpdateWorkflowMutation,
+  useDuplicateWorkflowMutation,
+  useStartRunMutation,
+  useGetRunQuery,
+} from '@/api/reconCraftApi';
 
 // Custom node component
 function CustomNode({ data }: { data: any }) {
@@ -50,9 +55,17 @@ const nodeTypes: NodeTypes = {
 
 export default function Builder() {
   const [searchParams] = useSearchParams();
-  const dispatch = useAppDispatch();
-  const { currentWorkflow } = useAppSelector((state) => state.workflows);
-  
+  const workflowId = searchParams.get('id');
+
+  // RTK Query hooks
+  const { data: currentWorkflow, isLoading: loadingWorkflow } = useGetWorkflowQuery(workflowId!, {
+    skip: !workflowId,
+  });
+  const [createWorkflow] = useCreateWorkflowMutation();
+  const [updateWorkflow] = useUpdateWorkflowMutation();
+  const [duplicateWorkflowMutation] = useDuplicateWorkflowMutation();
+  const [startRunMutation] = useStartRunMutation();
+
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [workflowName, setWorkflowName] = useState('New Workflow');
@@ -60,37 +73,60 @@ export default function Builder() {
   const [selectedNode, setSelectedNode] = useState<WorkflowNode | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
 
-  useEffect(() => {
-    const id = searchParams.get('id');
-    if (id) {
-      dispatch(fetchWorkflow(id));
-    }
-  }, [searchParams, dispatch]);
+  // Poll for run updates when a run is active
+  const { data: currentRun } = useGetRunQuery(currentRunId!, {
+    skip: !currentRunId,
+    pollingInterval: 2000, // Poll every 2 seconds
+  });
 
   useEffect(() => {
     if (currentWorkflow) {
       setWorkflowName(currentWorkflow.name);
       setAuthorized(currentWorkflow.authorizedTargets);
-      
+
       const flowNodes: Node[] = currentWorkflow.nodes.map((n) => ({
         id: n.id,
         type: 'custom',
         position: n.position,
         data: { ...n },
       }));
-      
+
       const flowEdges: Edge[] = currentWorkflow.edges.map((e) => ({
         id: e.id,
         source: e.source,
         target: e.target,
         label: e.label,
       }));
-      
+
       setNodes(flowNodes);
       setEdges(flowEdges);
     }
   }, [currentWorkflow, setNodes, setEdges]);
+
+  // Update logs when run data changes
+  useEffect(() => {
+    if (currentRun) {
+      const newLogs: string[] = [];
+      currentRun.steps.forEach((step) => {
+        step.logs.forEach((log) => {
+          newLogs.push(log);
+        });
+      });
+      setLogs(newLogs);
+
+      // Update running state
+      if (currentRun.status === 'succeeded' || currentRun.status === 'failed') {
+        setIsRunning(false);
+        if (currentRun.status === 'succeeded') {
+          toast.success('Workflow completed successfully');
+        } else {
+          toast.error('Workflow failed');
+        }
+      }
+    }
+  }, [currentRun]);
 
   const onConnect = useCallback(
     (params: Connection) => setEdges((eds) => addEdge(params, eds)),
@@ -152,38 +188,55 @@ export default function Builder() {
   };
 
   const handleSave = async () => {
-    const workflowNodes: WorkflowNode[] = nodes.map((n) => ({
-      id: n.id,
-      kind: n.data.kind,
-      label: n.data.label,
-      category: n.data.category,
-      config: n.data.config,
-      position: n.position,
-    }));
+    try {
+      const workflowNodes: WorkflowNode[] = nodes.map((n) => ({
+        id: n.id,
+        kind: n.data.kind,
+        label: n.data.label,
+        category: n.data.category,
+        config: n.data.config,
+        position: n.position,
+      }));
 
-    const workflow = {
-      id: currentWorkflow?.id || `wf-${Date.now()}`,
-      name: workflowName,
-      nodes: workflowNodes,
-      edges: edges.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        label: e.label,
-      })),
-      createdAt: currentWorkflow?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      authorizedTargets: authorized,
-    };
+      const workflowData = {
+        name: workflowName,
+        nodes: workflowNodes,
+        edges: edges.map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          label: e.label,
+        })),
+        authorizedTargets: authorized,
+      };
 
-    await dispatch(saveWorkflow(workflow));
-    toast.success('Workflow saved');
+      if (currentWorkflow?.id) {
+        // Update existing workflow
+        await updateWorkflow({
+          id: currentWorkflow.id,
+          workflow: workflowData,
+        }).unwrap();
+      } else {
+        // Create new workflow
+        await createWorkflow(workflowData).unwrap();
+      }
+
+      toast.success('Workflow saved');
+    } catch (error: any) {
+      toast.error(`Failed to save workflow: ${error.message || 'Unknown error'}`);
+      console.error('Save error:', error);
+    }
   };
 
   const handleDuplicate = async () => {
     if (currentWorkflow) {
-      await dispatch(duplicateWorkflow(currentWorkflow.id));
-      toast.success('Workflow duplicated');
+      try {
+        await duplicateWorkflowMutation(currentWorkflow.id).unwrap();
+        toast.success('Workflow duplicated');
+      } catch (error: any) {
+        toast.error(`Failed to duplicate workflow: ${error.message || 'Unknown error'}`);
+        console.error('Duplicate error:', error);
+      }
     }
   };
 
@@ -198,34 +251,33 @@ export default function Builder() {
       return;
     }
 
-    setIsRunning(true);
-    setLogs([]);
-    toast.success('Workflow started');
-
-    // Simulate run with streaming logs
-    const mockLogs = [
-      '[00:00] Workflow started',
-      '[00:01] Initializing nodes',
-      '[00:02] Starting Nmap scan',
-      '[00:04] Scan progress: 30%',
-      '[00:06] Scan progress: 60%',
-      '[00:08] Scan progress: 90%',
-      '[00:09] Scan complete - found 3 open ports',
-      '[00:10] Generating report',
-      '[00:11] Workflow completed successfully',
-    ];
-
-    for (const log of mockLogs) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setLogs((prev) => [...prev, log]);
+    if (!currentWorkflow?.id) {
+      toast.error('Please save the workflow before running');
+      return;
     }
 
-    if (currentWorkflow) {
-      await dispatch(startRun(currentWorkflow.id));
-    }
+    try {
+      setIsRunning(true);
+      setLogs([]);
+      toast.success('Starting workflow...');
 
-    setIsRunning(false);
-    toast.success('Workflow completed');
+      // Get targets from workflow config or use default
+      const targets = ['demo-target.example.com']; // TODO: Allow user to specify targets
+
+      const run = await startRunMutation({
+        workflowId: currentWorkflow.id,
+        targets,
+        runMode: 'demo', // TODO: Allow user to select mode
+        authorizeTargets: authorized,
+      }).unwrap();
+
+      setCurrentRunId(run.id);
+      toast.success('Workflow started');
+    } catch (error: any) {
+      setIsRunning(false);
+      toast.error(`Failed to start workflow: ${error.message || 'Unknown error'}`);
+      console.error('Run error:', error);
+    }
   };
 
   const loadDemoWorkflow = () => {
